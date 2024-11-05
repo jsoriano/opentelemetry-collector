@@ -152,6 +152,11 @@ func (l *Conf) Get(key string) any {
 	return sanitizeExpanded(val, false)
 }
 
+// Delete deletes any value from the given key.
+func (l *Conf) Delete(key string) {
+	l.k.Delete(key)
+}
+
 // IsSet checks to see if the key has been set in any of the data locations.
 func (l *Conf) IsSet(key string) bool {
 	return l.k.Exists(key)

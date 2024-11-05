@@ -46,6 +46,7 @@ type ConfigProvider interface {
 
 type configProvider struct {
 	mapResolver *confmap.Resolver
+	processors  []ConfigProcessor
 }
 
 var _ ConfigProvider = (*configProvider)(nil)
@@ -54,6 +55,9 @@ var _ ConfigProvider = (*configProvider)(nil)
 type ConfigProviderSettings struct {
 	// ResolverSettings are the settings to configure the behavior of the confmap.Resolver.
 	ResolverSettings confmap.ResolverSettings
+
+	// ConfigProcessors are the configuration processors included.
+	ConfigProcessors []ConfigProcessor
 }
 
 // NewConfigProvider returns a new ConfigProvider that provides the service configuration:
@@ -70,6 +74,7 @@ func NewConfigProvider(set ConfigProviderSettings) (ConfigProvider, error) {
 
 	return &configProvider{
 		mapResolver: mr,
+		processors:  set.ConfigProcessors,
 	}, nil
 }
 
@@ -77,6 +82,11 @@ func (cm *configProvider) Get(ctx context.Context, factories Factories) (*Config
 	conf, err := cm.mapResolver.Resolve(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve the configuration: %w", err)
+	}
+
+	conf, err = cm.applyConfigProcessors(conf, factories)
+	if err != nil {
+		return nil, err
 	}
 
 	var cfg *configSettings
@@ -92,6 +102,49 @@ func (cm *configProvider) Get(ctx context.Context, factories Factories) (*Config
 		Extensions: cfg.Extensions.Configs(),
 		Service:    cfg.Service,
 	}, nil
+}
+
+func (cm *configProvider) applyConfigProcessors(conf *confmap.Conf, factories Factories) (*confmap.Conf, error) {
+	if len(cm.processors) == 0 {
+		return conf, nil
+	}
+
+	// Read processor configs before unmarshaling the
+	var processorConfigs map[string]any
+	for _, processor := range cm.processors {
+		key := processor.ConfigKey()
+		subConf, err := conf.Sub(key)
+		if err != nil {
+			return nil, fmt.Errorf("cannot get config processor configuration %q: %w", key, err)
+		}
+
+		processorConf := processor.DefaultConfig()
+		err = subConf.Unmarshal(&processorConf)
+		if err != nil {
+			return nil, fmt.Errorf("cannot unmarshal processor configuration %q: %w", key, err)
+		}
+
+		processorConfigs[key] = processorConf
+		conf.Delete(key)
+	}
+
+	partial, err := unmarshalPartialConfig(conf)
+	if err != nil {
+		return nil, fmt.Errorf("cannot unmarshal initial partial config: %w", err)
+	}
+	for _, processor := range cm.processors {
+		processorConf := processorConfigs[processor.ConfigKey()]
+		err = processor.Process(partial, factories, processorConf)
+		if err != nil {
+			return nil, fmt.Errorf("cannot process configuration with processor %q: %w", processor.ConfigKey(), err)
+		}
+	}
+
+	ret, err := partial.ToConfmap()
+	if err != nil {
+		return nil, fmt.Errorf("cannot convert resulting partial config: %w", err)
+	}
+	return ret, nil
 }
 
 func (cm *configProvider) Watch() <-chan error {
