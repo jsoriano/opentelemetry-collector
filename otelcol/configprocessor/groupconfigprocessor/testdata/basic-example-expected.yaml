@@ -1,0 +1,18 @@
+receivers:
+  hostmetrics/group/all:
+  otlp/group/all:
+  redis/group/all:
+
+processors:
+  batch/group:
+
+exporters:
+  otlp/group:
+    endpoint: localhost:4317
+
+service:
+  pipelines:
+    metrics:
+      receivers: [hostmetrics/group/all,otlp/group/all,redis/group/all]
+      processors: [batch/group]
+      exporters: [otlp/group]
